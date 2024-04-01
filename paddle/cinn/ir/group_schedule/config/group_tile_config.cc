@@ -11,9 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
+#include "paddle/common/flags.h"
 #include "paddle/cinn/ir/group_schedule/config/group_tile_config.h"
 #include "paddle/cinn/hlir/framework/pir/op_lowering_impl.h"
+
+COMMON_DECLARE_int32(warp_num);
+COMMON_DECLARE_int32(tree_reduce_num);
 
 namespace cinn {
 namespace ir {
@@ -69,18 +72,22 @@ std::unordered_map<BucketInfo, ScheduleConfig::TileConfig, BucketInfoHash>
 BuildPureStaticShapeConfig(
     const std::shared_ptr<ScheduleConfig::BaseInfo>& base_info,
     const common::Target& target) {
+  VLOG(-1) << "warp_num: " <<FLAGS_warp_num;
+  VLOG(-1) << "tree_reduce_num: " << FLAGS_tree_reduce_num;
   if (base_info->spatial_numel == 1) {  // reduce all
+    VLOG(-1) << "DEBUG match spatial 1 branch";
     BucketInfo bucket_info{/* sp_lower_bound = */ 1,
                            /* sp_upper_bound = */ 1,
                            /* rb_lower_bound = */ 1,
                            /* rb_upper_bound = */ kMaxNumel};
     ScheduleConfig::TileConfig tile_config{
-        /* warp_num = */ 8,
-        /* tree_reduce_num = */ 256,
+        /* warp_num = */ FLAGS_warp_num,
+        /* tree_reduce_num = */ FLAGS_tree_reduce_num,
         /* spatial_inner_num = */ 1,
         /* reduce_method = */ BlockReduceMethod()};
     return {{bucket_info, tile_config}};
   } else if (base_info->reduce_numel == 1) {  // no reduce
+    VLOG(-1) << "DEBUG match reduce 1 branch";
     int64_t spatial_block = Next2Power(base_info->spatial_numel);
     if (spatial_block > 1024) {
       spatial_block = 1024;
@@ -100,6 +107,7 @@ BuildPureStaticShapeConfig(
         /* reduce_method = */ NoneReduceMethod()};
     return {{bucket_info, tile_config}};
   } else if (base_info->reduce_numel <= 256) {
+    VLOG(-1) << "DEBUG match reduce 256 branch";
     // warp reduce
     int64_t reduce_block = Next2Power(base_info->reduce_numel);
     int64_t spatial_inner_num = 256 / reduce_block;
@@ -116,6 +124,7 @@ BuildPureStaticShapeConfig(
         /* reduce_method = */ WarpReduceMethod()};
     return {{bucket_info, tile_config}};
   } else if (base_info->reduce_numel <= 2048) {
+    VLOG(-1) << "DEBUG match reduce 2048 branch";
     int64_t spatial_block = 1;
     int64_t reduce_block =
         int64_t(std::ceil(base_info->reduce_numel * 1.0 / 256.0)) * 256;
@@ -134,6 +143,7 @@ BuildPureStaticShapeConfig(
         /* reduce_method = */ BlockReduceMethod()};
     return {{bucket_info, tile_config}};
   } else {
+    VLOG(-1) << "DEBUG match else branch";
     int64_t spatial_block = 1;
     int64_t reduce_block = 2048;
     int64_t warp_num = 8;

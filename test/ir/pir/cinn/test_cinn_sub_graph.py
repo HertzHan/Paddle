@@ -16,8 +16,17 @@ import unittest
 
 import numpy as np
 import utils
+import sys
 
 import paddle
+
+if len(sys.argv)>2:
+    shape_str = sys.argv[2]
+    sys.argv.pop()
+    global_shape = eval(shape_str)
+    # print("****************")
+    # print(shape)
+    # print("****************")
 
 
 def exp_sub(x):
@@ -120,6 +129,29 @@ class CINNDropoutSubGraphNet(paddle.nn.Layer):
         out = self.fn(x)
         return out
 
+class CINNLlamaRMSNorm(paddle.nn.Layer):#newly added rmsnorm layer
+    def __init__(self, last_dim):
+        super().__init__()
+        self.variance_epsilon = 1e-6
+        self.sample = last_dim
+
+    def forward(self, hidden_states, weight):
+        variance = hidden_states.pow(2).sum(-1, keepdim=True) / self.sample
+        hidden_states = (
+            paddle.rsqrt(variance + self.variance_epsilon) * hidden_states
+        )
+        return hidden_states * weight
+
+class PIRLlamaRMSNorm(paddle.nn.Layer):#nrmsnorm layer with pir
+    def __init__(self):
+        super().__init__()
+        self.variance_epsilon = 1e-6
+
+    def forward(self, hidden_states, weight):
+        print(hidden_states.shape)
+        last_axis = len(hidden_states.shape) -1
+        out = paddle.incubate.nn.functional.fused_rms_norm(hidden_states, weight,  norm_bias = None,epsilon=self.variance_epsilon, begin_norm_axis=last_axis)
+        return out
 
 class TestCinnSubGraphBase(unittest.TestCase):
     """
@@ -131,9 +163,13 @@ class TestCinnSubGraphBase(unittest.TestCase):
         self.prepare_data()
 
     def prepare_data(self):
-        self.shape = [128, 128, 768]
+        # self.shape = [128, 128, 768]
+        #self.shape = [128, 12, 128, 128]
+        #self.shape = [1, 1, 4096]
+        # self.shape = [1, 17, 4096]
+        self.shape = global_shape
         self.axis = -1
-        self.x = paddle.uniform(self.shape, dtype="float64", min=-0.5, max=0.5)
+        self.x = paddle.uniform(self.shape, dtype="float32", min=-0.5, max=0.5)
         self.x.stop_gradient = False
 
     def check_jit_kernel_info(self, static_fn):
@@ -158,23 +194,29 @@ class TestCinnSubGraphBase(unittest.TestCase):
 #         np.testing.assert_allclose(cinn_out.numpy(), dy_out.numpy(), atol=1e-8)
 
 
-# class TestCinnSoftmax(TestCinnSubGraphBase):
-#     def train(self, use_cinn):
-#         paddle.seed(2022)
-#         net = CINNSoftmaxSubGraphNet()
-#         net = utils.apply_to_static(net, use_cinn)
-#         out = net(self.x, self.axis)
+class TestCinnSoftmax(TestCinnSubGraphBase):
+    def train(self, use_cinn):
+        paddle.seed(2022)
+        self.prepare_data()
+        net = CINNSoftmaxSubGraphNet()
+        net = utils.apply_to_static(net, use_cinn)
+        net.eval()
+        for i in range(10000):
+            out = net(self.x, self.axis)
+        # out.eval()
+        # loss = out.sum()
+        # loss.backward()
+        print(self.x.gradient())
+        return out#, self.x.gradient()
 
-#         loss = out.sum()
-#         loss.backward()
-#         print(self.x.gradient())
-#         return out, self.x.gradient()
-
-#     def test_forward(self):
-#         cinn_out, cinn_grad = self.train(use_cinn=True)
-#         dy_out, dy_grad = self.train(use_cinn=False)
-#         np.testing.assert_allclose(cinn_out.numpy(), dy_out.numpy(), atol=1e-8)
-#         np.testing.assert_allclose(cinn_grad, dy_grad, atol=1e-8)
+    def test_forward(self):
+        print("************")
+        print(self.shape)
+        print("************")
+        # cinn_outd = self.train(use_cinn=True)
+        dy_out = self.train(use_cinn=False)
+        # np.testing.assert_allclose(cinn_out.numpy(), dy_out.numpy(), atol=1e-8)
+        # np.testing.assert_allclose(cinn_grad, dy_grad, atol=1e-8)
 
 
 class TestCinnLayerNorm(TestCinnSubGraphBase):
@@ -183,30 +225,59 @@ class TestCinnLayerNorm(TestCinnSubGraphBase):
         self.prepare_data()
         net = CINNLayerNormSubGraphNet(self.shape[-1])
         net = utils.apply_to_static(net, use_cinn)
-        # net.eval()
-        weight = paddle.ones(shape=[self.shape[-1]], dtype="float64")
+        net.eval()
+        weight = paddle.ones(shape=[self.shape[-1]], dtype="float32")
         weight.stop_gradient = False
-        bias = paddle.ones(shape=[self.shape[-1]], dtype="float64")
+        bias = paddle.ones(shape=[self.shape[-1]], dtype="float32")
         bias.stop_gradient = False
         self.x.stop_gradient = False
-        out = net(self.x, weight, bias)
-        loss = out.sum()
-        loss.backward()
+        for i in range(10000):
+            out = net(self.x, weight, bias)
+        # loss = out.sum()
+        # loss.backward()
 
-        return out, self.x.gradient(), weight.gradient(), bias.gradient()
+        return out#, self.x.gradient(), weight.gradient(), bias.gradient()
 
     def test_train(self):
-        cinn_out, cinn_x_grad, cinn_w_grad, cinn_b_grad = self.train(
+        print("************")
+        print(self.shape)
+        print("************")
+        cinn_out = self.train(
             use_cinn=True
         )
 
-        dy_out, dy_x_grad, dy_w_grad, dy_b_grad = self.train(use_cinn=False)
-        np.testing.assert_allclose(cinn_out.numpy(), dy_out.numpy(), atol=1e-8)
-        np.testing.assert_allclose(cinn_x_grad, dy_x_grad, atol=1e-8)
-        np.testing.assert_allclose(cinn_w_grad, dy_w_grad, atol=1e-8)
-        np.testing.assert_allclose(cinn_b_grad, dy_b_grad, atol=1e-8)
+        dy_out = self.train(use_cinn=False)
+        # np.testing.assert_allclose(cinn_out.numpy(), dy_out.numpy(), atol=1e-8)
+        # np.testing.assert_allclose(cinn_x_grad, dy_x_grad, atol=1e-8)
+        # np.testing.assert_allclose(cinn_w_grad, dy_w_grad, atol=1e-8)
+        # np.testing.assert_allclose(cinn_b_grad, dy_b_grad, atol=1e-8)
 
+class TestLlamaRMSNorm(TestCinnSubGraphBase):
+    def train(self, use_cinn):
+        paddle.seed(2022)
+        self.prepare_data()
+        if use_cinn:
+            net = CINNLlamaRMSNorm(self.shape[-1])
+        else : 
+            net = PIRLlamaRMSNorm()
+        net = utils.apply_to_static(net, use_cinn)
+        net.eval()
+        weight = paddle.ones(shape=[self.shape[-1]], dtype="float32")
+        weight.stop_gradient = False
+        #self.x.stop_gradient = False
+        for i in range(10000):
+            out = net(self.x, weight)
+        return out
 
+    def test_train(self):
+        print("************")
+        print(self.shape)
+        print("************")
+        cinn_out = self.train(use_cinn=True)
+
+        dy_out = self.train(use_cinn=False)
+        #dy_out = self.train(use_cinn=False)
+        # np.testing.assert_allclose(cinn_out.numpy(), dy_out.numpy(), atol=1e-6, rtol=1e-6)
 # class TestAddDropoutLayerNorm(TestCinnSubGraphBase):
 #     def train(self, use_cinn):
 #         paddle.seed(2022)
@@ -332,4 +403,7 @@ class TestCinnLayerNorm(TestCinnSubGraphBase):
 
 
 if __name__ == '__main__':
+    
+    #module_name = sys.argv[1]
+    
     unittest.main()

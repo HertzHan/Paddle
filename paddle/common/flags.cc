@@ -1618,3 +1618,16 @@ PHI_DEFINE_EXPORTED_string(cusolver_dir,  // NOLINT
 PHI_DEFINE_EXPORTED_string(cusparse_dir,  // NOLINT
                            "",
                            "Specify path for loading libcusparse.so.*.");
+
+/**
+ * for DSE
+ */
+PHI_DEFINE_EXPORTED_int32(
+    warp_num,  // NOLINT
+    8,
+    "warp_num for DSE.");
+PHI_DEFINE_EXPORTED_int32(
+    tree_reduce_num,  // NOLINT
+   256,
+    "tree_reduce_num for DSE."); 
+
